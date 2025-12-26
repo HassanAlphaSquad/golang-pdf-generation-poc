@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"log"
 
 	"github.com/HassanAlphaSquad/golang-pdf-generation-poc/internal/api/models"
 	"github.com/HassanAlphaSquad/golang-pdf-generation-poc/internal/storage"
@@ -22,16 +23,16 @@ func NewPDFHandler(generator *pdfgen.Generator, store *storage.JobStore) *PDFHan
 	}
 }
 
-// @Summary 		Generate PDF from HTML
-// @Description 	Generate a PDF document from HTML content
-// @Tags 			PDF
-// @Accept 			json
-// @Produce 		json
-// @Param 			request body models.GeneratePDFRequest true "PDF generation request"
-// @Success 		202 {object} models.GeneratePDFResponse
-// @Failure 		400 {object} models.ErrorResponse
-// @Failure 		500 {object} models.ErrorResponse
-// @Router 			/api/v1/pdf/generate [post]
+// @Summary Generate PDF from HTML
+// @Description Generate a PDF document from HTML content
+// @Tags PDF
+// @Accept json
+// @Produce json
+// @Param request body models.GeneratePDFRequest true "PDF generation request"
+// @Success 202 {object} models.GeneratePDFResponse
+// @Failure 400 {object} models.ErrorResponse
+// @Failure 500 {object} models.ErrorResponse
+// @Router /api/pdf/generate [post]
 func (h *PDFHandler) GeneratePDF(c *fiber.Ctx) error {
 	var req models.GeneratePDFRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -72,7 +73,7 @@ func (h *PDFHandler) GeneratePDF(c *fiber.Ctx) error {
 // @Success 202 {object} models.GeneratePDFResponse
 // @Failure 400 {object} models.ErrorResponse
 // @Failure 500 {object} models.ErrorResponse
-// @Router /api/v1/pdf/generate/url [post]
+// @Router /api/pdf/generate/url [post]
 func (h *PDFHandler) GenerateFromURL(c *fiber.Ctx) error {
 	var req models.GenerateFromURLRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -112,7 +113,7 @@ func (h *PDFHandler) GenerateFromURL(c *fiber.Ctx) error {
 // @Param id path string true "Job ID"
 // @Success 200 {object} models.JobStatusResponse
 // @Failure 404 {object} models.ErrorResponse
-// @Router /api/v1/pdf/status/{id} [get]
+// @Router /api/pdf/status/{id} [get]
 func (h *PDFHandler) GetJobStatus(c *fiber.Ctx) error {
 	jobID := c.Params("id")
 
@@ -137,7 +138,7 @@ func (h *PDFHandler) GetJobStatus(c *fiber.Ctx) error {
 	}
 
 	if job.Status == models.JobStatusCompleted {
-		response.DownloadURL = fmt.Sprintf("/api/v1/pdf/download/%s", job.ID)
+		response.DownloadURL = fmt.Sprintf("/api/pdf/download/%s", job.ID)
 	}
 
 	return c.JSON(response)
@@ -150,7 +151,7 @@ func (h *PDFHandler) GetJobStatus(c *fiber.Ctx) error {
 // @Param id path string true "Job ID"
 // @Success 200 {file} binary
 // @Failure 404 {object} models.ErrorResponse
-// @Router /api/v1/pdf/download/{id} [get]
+// @Router /api/pdf/download/{id} [get]
 func (h *PDFHandler) DownloadPDF(c *fiber.Ctx) error {
 	jobID := c.Params("id")
 
@@ -162,6 +163,7 @@ func (h *PDFHandler) DownloadPDF(c *fiber.Ctx) error {
 			Code:    fiber.StatusNotFound,
 		})
 	}
+	defer h.store.ReleaseFile(jobID)
 
 	job, _ := h.store.GetJob(jobID)
 	c.Set("Content-Type", "application/pdf")
@@ -177,7 +179,7 @@ func (h *PDFHandler) DownloadPDF(c *fiber.Ctx) error {
 // @Param page query int false "Page number" default(1)
 // @Param page_size query int false "Page size" default(20)
 // @Success 200 {object} models.ListJobsResponse
-// @Router /api/v1/pdf/jobs [get]
+// @Router /api/pdf/jobs [get]
 func (h *PDFHandler) ListJobs(c *fiber.Ctx) error {
 	page := c.QueryInt("page", 1)
 	pageSize := c.QueryInt("page_size", 20)
@@ -205,7 +207,7 @@ func (h *PDFHandler) ListJobs(c *fiber.Ctx) error {
 		}
 
 		if job.Status == models.JobStatusCompleted {
-			status.DownloadURL = fmt.Sprintf("/api/v1/pdf/download/%s", job.ID)
+			status.DownloadURL = fmt.Sprintf("/api/pdf/download/%s", job.ID)
 		}
 
 		jobStatuses = append(jobStatuses, status)
@@ -229,8 +231,10 @@ func (h *PDFHandler) processJob(job *storage.Job) {
 	err := h.generator.FromHTMLWithCustomOptions(job.HTML, job.FilePath, opts)
 
 	if err != nil {
+		log.Printf("Job %s failed: %v", job.ID, err)
 		h.store.UpdateJobStatus(job.ID, models.JobStatusFailed, err.Error())
 	} else {
+		log.Printf("Job %s completed successfully", job.ID)
 		h.store.UpdateJobStatus(job.ID, models.JobStatusCompleted, "")
 	}
 }
@@ -242,8 +246,10 @@ func (h *PDFHandler) processURLJob(job *storage.Job, url string) {
 	err := h.generator.FromURLWithCustomOptions(url, job.FilePath, opts)
 
 	if err != nil {
+		log.Printf("URL Job %s failed: %v", job.ID, err)
 		h.store.UpdateJobStatus(job.ID, models.JobStatusFailed, err.Error())
 	} else {
+		log.Printf("URL Job %s completed successfully", job.ID)
 		h.store.UpdateJobStatus(job.ID, models.JobStatusCompleted, "")
 	}
 }

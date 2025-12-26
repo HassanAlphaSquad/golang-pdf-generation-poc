@@ -17,7 +17,7 @@ echo "Reading $HTML_FILE..."
 HTML_CONTENT=$(cat "$HTML_FILE" | jq -Rs .)
 
 echo "Sending to API..."
-RESPONSE=$(curl -s -X POST http://localhost:3000/api/v1/pdf/generate \
+RESPONSE=$(curl -s -X POST http://localhost:3000/api/pdf/generate \
   -H "Content-Type: application/json" \
   -d "{
     \"html\": $HTML_CONTENT,
@@ -29,12 +29,12 @@ echo "Job ID: $JOB_ID"
 
 echo "Waiting for PDF generation..."
 while true; do
-    STATUS_RESPONSE=$(curl -s http://localhost:3000/api/v1/pdf/status/$JOB_ID)
+    STATUS_RESPONSE=$(curl -s http://localhost:3000/api/pdf/status/$JOB_ID)
     STATUS=$(echo $STATUS_RESPONSE | jq -r '.status')
 
     if [ "$STATUS" = "completed" ]; then
         echo "PDF generated successfully!"
-        curl -s http://localhost:3000/api/v1/pdf/download/$JOB_ID -o "$OUTPUT_NAME"
+        curl -s http://localhost:3000/api/pdf/download/$JOB_ID -o "$OUTPUT_NAME"
         echo "Saved to: $OUTPUT_NAME"
         break
     elif [ "$STATUS" = "failed" ]; then

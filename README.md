@@ -19,7 +19,7 @@ Server starts on port 3000. Swagger docs available at http://localhost:3000/swag
 ### Generate PDF from HTML
 
 ```bash
-curl -X POST http://localhost:3000/api/v1/pdf/generate \
+curl -X POST http://localhost:3000/api/pdf/generate \
   -H "Content-Type: application/json" \
   -d '{
     "html": "<html><body><h1>Test</h1></body></html>",
@@ -30,19 +30,19 @@ curl -X POST http://localhost:3000/api/v1/pdf/generate \
 Returns a job ID. Use it to check status:
 
 ```bash
-curl http://localhost:3000/api/v1/pdf/status/{job_id}
+curl http://localhost:3000/api/pdf/status/{job_id}
 ```
 
 Download when complete:
 
 ```bash
-curl http://localhost:3000/api/v1/pdf/download/{job_id} -o output.pdf
+curl http://localhost:3000/api/pdf/download/{job_id} -o output.pdf
 ```
 
 ### Generate from URL
 
 ```bash
-curl -X POST http://localhost:3000/api/v1/pdf/generate/url \
+curl -X POST http://localhost:3000/api/pdf/generate/url \
   -H "Content-Type: application/json" \
   -d '{
     "url": "https://example.com",

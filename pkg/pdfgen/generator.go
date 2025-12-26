@@ -26,10 +26,10 @@ func NewGenerator(timeout time.Duration) *Generator {
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
-	return &Generator{
-		timeout: timeout,
-	}
+	return &Generator{timeout: timeout}
 }
+
+func (g *Generator) Close() {}
 
 func (g *Generator) validateHTML(html string) error {
 	if strings.TrimSpace(html) == "" {
@@ -73,58 +73,60 @@ func (g *Generator) FromHTMLWithCustomOptions(html string, outputPath string, op
 		opts = DefaultPrintOptions()
 	}
 
-	return g.generateFromHTML(html, outputPath, opts.ToCDPParams(), opts.WaitBeforePrint)
+	return g.generatePDF(html, outputPath, opts.ToCDPParams(), opts.WaitBeforePrint)
 }
 
-func (g *Generator) generateFromHTML(html string, outputPath string, opts *page.PrintToPDFParams, waitTime time.Duration) error {
-	ctx, cancel := chromedp.NewContext(context.Background())
+func (g *Generator) generatePDF(html string, outputPath string, opts *page.PrintToPDFParams, waitTime time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
-	ctx, cancel = context.WithTimeout(ctx, g.timeout)
-	defer cancel()
+	// Allocator options
+	options := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.DisableGPU,
+		chromedp.NoSandbox,
+		chromedp.Flag("disable-dev-shm-usage", true),
+	)
+
+	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, options...)
+	defer allocCancel()
+
+	taskCtx, taskCancel := chromedp.NewContext(allocCtx)
+	defer taskCancel()
 
 	if opts == nil {
 		opts = page.PrintToPDF().WithPrintBackground(true)
 	}
 
-	var pdfBuf []byte
-	actions := []chromedp.Action{
+	if waitTime == 0 {
+		waitTime = 1 * time.Second
+	}
+
+	var pdfData []byte
+
+	if err := chromedp.Run(taskCtx,
 		chromedp.Navigate("about:blank"),
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			frameTree, err := page.GetFrameTree().Do(ctx)
 			if err != nil {
-				return fmt.Errorf("failed to get frame tree: %w", err)
+				return err
 			}
 			return page.SetDocumentContent(frameTree.Frame.ID, html).Do(ctx)
 		}),
+		chromedp.Sleep(waitTime),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			var err error
+			pdfData, _, err = opts.Do(ctx)
+			return err
+		}),
+	); err != nil {
+		return fmt.Errorf("failed to generate PDF: %w", err)
 	}
 
-	if waitTime > 0 {
-		actions = append(actions, chromedp.Sleep(waitTime))
+	if len(pdfData) == 0 {
+		return errors.New("PDF generation resulted in empty file")
 	}
 
-	actions = append(actions, chromedp.ActionFunc(func(ctx context.Context) error {
-		var err error
-		pdfBuf, _, err = opts.Do(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to generate PDF: %w", err)
-		}
-		return nil
-	}))
-
-	if err := chromedp.Run(ctx, actions...); err != nil {
-		return fmt.Errorf("chromedp execution failed: %w", err)
-	}
-
-	if len(pdfBuf) == 0 {
-		return errors.New("generated PDF buffer is empty")
-	}
-
-	if err := os.WriteFile(outputPath, pdfBuf, 0644); err != nil {
-		return fmt.Errorf("failed to write PDF file: %w", err)
-	}
-
-	return nil
+	return os.WriteFile(outputPath, pdfData, 0644)
 }
 
 func (g *Generator) FromURL(url string, outputPath string) error {
@@ -143,52 +145,45 @@ func (g *Generator) FromURLWithCustomOptions(url string, outputPath string, opts
 		opts = DefaultPrintOptions()
 	}
 
-	return g.generateFromURL(url, outputPath, opts.ToCDPParams(), opts.WaitBeforePrint)
-}
-
-func (g *Generator) generateFromURL(url string, outputPath string, opts *page.PrintToPDFParams, waitTime time.Duration) error {
-	ctx, cancel := chromedp.NewContext(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
 	defer cancel()
 
-	ctx, cancel = context.WithTimeout(ctx, g.timeout)
-	defer cancel()
+	options := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.DisableGPU,
+		chromedp.NoSandbox,
+		chromedp.Flag("disable-dev-shm-usage", true),
+	)
 
-	if opts == nil {
-		opts = page.PrintToPDF().WithPrintBackground(true)
+	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, options...)
+	defer allocCancel()
+
+	taskCtx, taskCancel := chromedp.NewContext(allocCtx)
+	defer taskCancel()
+
+	waitTime := opts.WaitBeforePrint
+	if waitTime == 0 {
+		waitTime = 2 * time.Second
 	}
 
-	var pdfBuf []byte
-	actions := []chromedp.Action{
+	var pdfData []byte
+
+	if err := chromedp.Run(taskCtx,
 		chromedp.Navigate(url),
-		chromedp.WaitReady("body"),
+		chromedp.Sleep(waitTime),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			var err error
+			pdfData, _, err = opts.ToCDPParams().Do(ctx)
+			return err
+		}),
+	); err != nil {
+		return fmt.Errorf("failed to generate PDF from URL: %w", err)
 	}
 
-	if waitTime > 0 {
-		actions = append(actions, chromedp.Sleep(waitTime))
+	if len(pdfData) == 0 {
+		return errors.New("PDF generation resulted in empty file")
 	}
 
-	actions = append(actions, chromedp.ActionFunc(func(ctx context.Context) error {
-		var err error
-		pdfBuf, _, err = opts.Do(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to generate PDF: %w", err)
-		}
-		return nil
-	}))
-
-	if err := chromedp.Run(ctx, actions...); err != nil {
-		return fmt.Errorf("chromedp execution failed: %w", err)
-	}
-
-	if len(pdfBuf) == 0 {
-		return errors.New("generated PDF buffer is empty")
-	}
-
-	if err := os.WriteFile(outputPath, pdfBuf, 0644); err != nil {
-		return fmt.Errorf("failed to write PDF file: %w", err)
-	}
-
-	return nil
+	return os.WriteFile(outputPath, pdfData, 0644)
 }
 
 func (g *Generator) FromFile(htmlPath string, outputPath string) error {

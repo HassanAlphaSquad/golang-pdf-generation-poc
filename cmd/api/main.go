@@ -69,7 +69,7 @@ func main() {
 	app.Get("/health", healthHandler.HealthCheck)
 	app.Get("/swagger/*", swagger.HandlerDefault)
 
-	v1 := app.Group("/api/v1")
+	v1 := app.Group("/api")
 	pdf := v1.Group("/pdf")
 	pdf.Post("/generate", pdfHandler.GeneratePDF)
 	pdf.Post("/generate/url", pdfHandler.GenerateFromURL)
@@ -104,6 +104,10 @@ func main() {
 		<-sigChan
 
 		log.Println("Shutting down server...")
+
+		// Close browser instance
+		generator.Close()
+
 		if err := app.Shutdown(); err != nil {
 			log.Printf("Error during shutdown: %v", err)
 		}

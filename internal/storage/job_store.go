@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -26,10 +27,11 @@ type Job struct {
 }
 
 type JobStore struct {
-	jobs      map[string]*Job
-	batches   map[string][]string
-	mu        sync.RWMutex
-	outputDir string
+	jobs          map[string]*Job
+	batches       map[string][]string
+	fileAccessRef map[string]int // Track active file accesses
+	mu            sync.RWMutex
+	outputDir     string
 }
 
 func NewJobStore(outputDir string) (*JobStore, error) {
@@ -39,9 +41,10 @@ func NewJobStore(outputDir string) (*JobStore, error) {
 	}
 
 	return &JobStore{
-		jobs:      make(map[string]*Job),
-		batches:   make(map[string][]string),
-		outputDir: outputDir,
+		jobs:          make(map[string]*Job),
+		batches:       make(map[string][]string),
+		fileAccessRef: make(map[string]int),
+		outputDir:     outputDir,
 	}, nil
 }
 
@@ -159,13 +162,10 @@ func (s *JobStore) ListJobs(page, pageSize int) ([]*Job, int) {
 		allJobs = append(allJobs, job)
 	}
 
-	for i := 0; i < len(allJobs)-1; i++ {
-		for j := 0; j < len(allJobs)-i-1; j++ {
-			if allJobs[j].CreatedAt.Before(allJobs[j+1].CreatedAt) {
-				allJobs[j], allJobs[j+1] = allJobs[j+1], allJobs[j]
-			}
-		}
-	}
+	// Sort by CreatedAt descending (most recent first) - O(n log n)
+	sort.Slice(allJobs, func(i, j int) bool {
+		return allJobs[i].CreatedAt.After(allJobs[j].CreatedAt)
+	})
 
 	total := len(allJobs)
 
@@ -191,6 +191,9 @@ func (s *JobStore) CleanupOldJobs(olderThan time.Duration) int {
 
 	for id, job := range s.jobs {
 		if job.CreatedAt.Before(cutoff) {
+			if s.fileAccessRef[id] > 0 {
+				continue
+			}
 
 			if job.FilePath != "" {
 				os.Remove(job.FilePath)
@@ -246,9 +249,12 @@ func (s *JobStore) GetStats() map[string]int {
 }
 
 func (s *JobStore) GetFilePath(id string) (string, error) {
-	job, err := s.GetJob(id)
-	if err != nil {
-		return "", err
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	job, exists := s.jobs[id]
+	if !exists {
+		return "", fmt.Errorf("job not found: %s", id)
 	}
 
 	if job.Status != models.JobStatusCompleted {
@@ -259,5 +265,20 @@ func (s *JobStore) GetFilePath(id string) (string, error) {
 		return "", fmt.Errorf("file not found")
 	}
 
+	s.fileAccessRef[id]++
+
 	return job.FilePath, nil
+}
+
+func (s *JobStore) ReleaseFile(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if count, exists := s.fileAccessRef[id]; exists {
+		if count > 1 {
+			s.fileAccessRef[id]--
+		} else {
+			delete(s.fileAccessRef, id)
+		}
+	}
 }
